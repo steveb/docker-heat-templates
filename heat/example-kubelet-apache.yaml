@@ -1,0 +1,117 @@
+heat_template_version: 2014-10-16
+parameters:
+  key_name:
+    type: string
+    default: heat_key
+  flavor:
+    type: string
+    default: m1.small
+  image:
+    type: string
+    default: heat-functional-tests-image
+  apache_image:
+    type: string
+    default: fedora/apache
+
+resources:
+  the_sg:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: the_sg
+      description: Ping, ssh and 8000-8999 for http
+      rules:
+      - protocol: icmp
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+      - protocol: tcp
+        port_range_min: 8000
+        port_range_max: 8999
+
+  hook_config:
+    type: OS::Heat::StructuredConfig
+    properties:
+      group: cfn-init
+      config:
+        config:
+          files:
+            /var/lib/heat-config/hooks/kubelet:
+              content:
+                get_input: kubelet_hook
+              mode: '000755'
+            /usr/libexec/os-refresh-config/configure.d/50-heat-config-kubelet:
+              content:
+                get_input: kubelet_orc
+              mode: '000755'
+
+  hook_deployment:
+    type: OS::Heat::StructuredDeployment
+    properties:
+      name: 10_apache_deployment
+      config:
+        get_resource: hook_config
+      server:
+        get_resource: server
+      input_values:
+        kubelet_hook: {get_file: ../heat-templates/hot/software-config/elements/heat-config-kubelet/install.d/hook-kubelet.py}
+        kubelet_orc: {get_file: ../heat-templates/hot/software-config/elements/heat-config-kubelet/os-refresh-config/configure.d/50-heat-config-kubelet}
+  apache_config:
+    type: OS::Heat::StructuredConfig
+    properties:
+      group: kubelet
+      options:
+        insecure_registry: true
+      config:
+        version: v1beta2
+        containers:
+          - name: apache
+            image: {get_param: apache_image}
+            command: [/run-apache.sh]
+            workingDir:
+            ports:
+            - containerPort: 80
+              hostPort: 8000
+            env:
+              - name: GOPATH
+                value: /usr/bin
+          - name: apache2
+            image: {get_param: apache_image}
+            command: [/run-apache.sh]
+            workingDir:
+            ports:
+            - containerPort: 80
+              hostPort: 8001
+            env:
+              - name: GOPATH
+                value: /usr/bin
+
+  apache_deployment:
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      actions: [CREATE, UPDATE]
+      name: 20_apache_deployment
+      config:
+        get_resource: apache_config
+      server:
+        get_resource: server
+
+  server:
+    type: OS::Nova::Server
+    properties:
+      image: {get_param: image}
+      flavor: {get_param: flavor}
+      key_name: {get_param: key_name}
+      security_groups:
+      - {get_resource: the_sg}
+      user_data_format: SOFTWARE_CONFIG
+
+outputs:
+  status_code:
+    value:
+      get_attr: [apache_deployment, deploy_status_code]
+  stdout:
+    value:
+      get_attr: [apache_deployment, deploy_stdout]
+  stderr:
+    value:
+      get_attr: [apache_deployment, deploy_stderr]

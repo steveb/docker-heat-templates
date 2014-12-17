@@ -1,0 +1,111 @@
+heat_template_version: 2014-10-16
+parameters:
+  key_name:
+    type: string
+    default: heat_key
+  flavor:
+    type: string
+    default: m1.small
+  image:
+    type: string
+    default: heat-functional-tests-image
+  container_image:
+    type: string
+    default: fedora/apache
+
+resources:
+  the_sg:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: the_sg
+      description: Ping and SSH
+      rules:
+      - protocol: icmp
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+
+  hook_config:
+    type: OS::Heat::StructuredConfig
+    properties:
+      group: cfn-init
+      config:
+        config:
+          files:
+            /var/lib/heat-config/hooks/docker:
+              content:
+                get_input: docker_hook
+              mode: '000755'
+            /tmp/foo:
+              content: bar
+              mode: '000644'
+
+  hook_deployment:
+    type: OS::Heat::StructuredDeployment
+    properties:
+      name: 10_apache_deployment
+      config:
+        get_resource: hook_config
+      server:
+        get_resource: server
+      input_values:
+        docker_hook: {get_file: ../elements/heat-config-docker/install.d/hook-docker.py}
+
+  apache_config:
+    type: OS::Heat::StructuredConfig
+    properties:
+      group: docker
+      options:
+        insecure_registry: true
+      config:
+        version: v1beta2
+        containers:
+          - name: apache_container
+            image: {get_param: container_image}
+            command: [/run-apache.sh]
+            workingDir:
+            volumeMounts:
+              - name: test_volume
+                mountPath: /log
+                readOnly: true
+            ports:
+              - name: http_port
+                containerPort: 80
+                hostPort: 8000
+                protocol: tcp
+            env:
+              - name: GOPATH
+                value: /usr/bin
+        volumes:
+          - name: test_volume
+
+  apache_deployment:
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      actions: [CREATE, UPDATE, DELETE]
+      name: 20_apache_deployment
+      config:
+        get_resource: apache_config
+      server:
+        get_resource: server
+
+  server:
+    type: OS::Nova::Server
+    properties:
+      image: {get_param: image}
+      flavor: {get_param: flavor}
+      key_name: {get_param: key_name}
+      security_groups:
+      - {get_resource: the_sg}
+      user_data_format: SOFTWARE_CONFIG
+
+outputs:
+  status_code:
+    value:
+      get_attr: [apache_deployment, deploy_status_code]
+  stdout:
+    value:
+      get_attr: [apache_deployment, deploy_stdout]
+  stderr:
+    value:
+      get_attr: [apache_deployment, deploy_stderr]

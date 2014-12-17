@@ -1,0 +1,184 @@
+heat_template_version: 2014-10-16
+parameters:
+  key_name:
+    type: string
+    default: heat_key
+  flavor:
+    type: string
+    default: m1.small
+  image:
+    type: string
+    default: heat-functional-tests-image
+  insecure_registry:
+    type: string
+  mariadb_image:
+    type: string
+    default: kollaglue/fedora-rdo-mariadb
+  rabbitmq_image:
+    type: string
+    default: kollaglue/fedora-rdo-rabbitmq
+  heat_engine_image:
+    type: string
+    default: stevebake/heat-engine-standalone
+  heat_api_image:
+    type: string
+    default: stevebake/heat-api-standalone
+  keystone_host:
+    type: string
+
+resources:
+  the_sg:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: the_sg
+      description: Ping, ssh, mysql
+      rules:
+      - protocol: icmp
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+      - protocol: tcp
+        port_range_min: 3306
+        port_range_max: 3306
+
+  hook_config:
+    type: OS::Heat::StructuredConfig
+    properties:
+      group: cfn-init
+      config:
+        config:
+          files:
+            /var/lib/heat-config/hooks/kubelet:
+              content:
+                get_input: kubelet_hook
+              mode: '000755'
+            /usr/libexec/os-refresh-config/configure.d/50-heat-config-kubelet:
+              content:
+                get_input: kubelet_orc
+              mode: '000755'
+
+  hook_deployment:
+    type: OS::Heat::StructuredDeployment
+    properties:
+      name: 10_apache_deployment
+      config:
+        get_resource: hook_config
+      server:
+        get_resource: server
+      input_values:
+        kubelet_hook: {get_file: ../heat-templates/hot/software-config/elements/heat-config-kubelet/install.d/hook-kubelet.py}
+        kubelet_orc: {get_file: ../heat-templates/hot/software-config/elements/heat-config-kubelet/os-refresh-config/configure.d/50-heat-config-kubelet}
+
+  heat_pod_config:
+    type: OS::Heat::StructuredConfig
+    properties:
+      group: kubelet
+      options:
+        insecure_registry: true
+      config:
+        version: v1beta2
+        containers:
+
+        - name: rabbitmq
+          image: {get_input: rabbitmq_image}
+          ports:
+          - containerPort: 5672
+            hostPort: 5672
+
+        - name: mariadb
+          image: {get_input: mariadb_image}
+          ports:
+          - containerPort: 3306
+            hostPort: 3306
+          env:
+          - name: DB_ROOT_PASSWORD
+            value: {get_input: mariadb_password}
+          volumeMounts:
+            - name: mariadb-data
+              mountPath: /var/lib/mysql
+
+        - name: heat-engine
+          image: {get_input: heat_engine_image}
+          env:
+          - name: RABBIT_PASSWORD
+            value: guest
+          - name: DB_ROOT_PASSWORD
+            value: {get_input: mariadb_password}
+          - name: HEAT_DB_PASSWORD
+            value: {get_input: heatdb_password}
+          - name: KEYSTONE_PUBLIC_SERVICE_HOST
+            value: {get_input: keystone_host}
+          - name: AUTH_ENCRYPTION_KEY
+            value: {get_input: heat_auth_encryption_key}
+          - name: HEAT_API_SERVICE_HOST
+            value: {get_attr: [server, first_address]}
+
+#        - name: heat-api
+#          image: {get_input: heat_api_image}
+#          ports:
+#          - containerPort: 8004
+
+        volumes:
+        - name: mariadb-data
+
+  mariadb_password:
+    type: OS::Heat::RandomString
+
+  heatdb_password:
+    type: OS::Heat::RandomString
+
+  heat_auth_encryption_key:
+    type: OS::Heat::RandomString
+
+  heat_pod_deployment:
+    type: OS::Heat::StructuredDeployment
+    properties:
+      #actions: [CREATE, UPDATE, DELETE]
+      name: 20_apache_deployment
+      config:
+        get_resource: heat_pod_config
+      server:
+        get_resource: server
+      input_values:
+        mariadb_image: {get_param: mariadb_image}
+        mariadb_password: {get_resource: mariadb_password}
+        rabbitmq_image: {get_param: rabbitmq_image}
+        heat_api_image: {get_param: heat_api_image}
+        heat_engine_image: {get_param: heat_engine_image}
+        heatdb_password: {get_resource: heatdb_password}
+
+  server:
+    type: OS::Nova::Server
+    properties:
+      image: {get_param: image}
+      flavor: {get_param: flavor}
+      key_name: {get_param: key_name}
+      security_groups:
+      - {get_resource: the_sg}
+      user_data_format: SOFTWARE_CONFIG
+
+outputs:
+  status_code:
+    value:
+      get_attr: [heat_pod_deployment, deploy_status_code]
+  stdout:
+    value:
+      get_attr: [heat_pod_deployment, deploy_stdout]
+  stderr:
+    value:
+      get_attr: [heat_pod_deployment, deploy_stderr]
+  mysql_cmd:
+    value:
+      str_replace:
+        template:
+          mysql -u root -h host -ppassword
+        params:
+          host: {get_attr: [server, first_address]}
+          password: {get_resource: mariadb_password}
+  ssh_cmd:
+    value:
+      str_replace:
+        template:
+          ssh ec2-user@host
+        params:
+          host: {get_attr: [server, first_address]}
