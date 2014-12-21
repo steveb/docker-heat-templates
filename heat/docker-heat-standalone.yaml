@@ -23,15 +23,21 @@ parameters:
   heat_api_image:
     type: string
     default: stevebake/heat-api-standalone
-  keystone_host:
+  os_auth_url:
     type: string
+  private_network:
+    type: string
+    default: private
+  public_network:
+    type: string
+    default: public
 
 resources:
   the_sg:
     type: OS::Neutron::SecurityGroup
     properties:
       name: the_sg
-      description: Ping, ssh, mysql
+      description: Ping, ssh, mysql, heat-api
       rules:
       - protocol: icmp
       - protocol: tcp
@@ -40,6 +46,9 @@ resources:
       - protocol: tcp
         port_range_min: 3306
         port_range_max: 3306
+      - protocol: tcp
+        port_range_min: 8004
+        port_range_max: 8004
 
   hook_config:
     type: OS::Heat::StructuredConfig
@@ -66,8 +75,8 @@ resources:
       server:
         get_resource: server
       input_values:
-        kubelet_hook: {get_file: ../heat-templates/hot/software-config/elements/heat-config-kubelet/install.d/hook-kubelet.py}
-        kubelet_orc: {get_file: ../heat-templates/hot/software-config/elements/heat-config-kubelet/os-refresh-config/configure.d/50-heat-config-kubelet}
+        kubelet_hook: {get_file: ../../heat-templates/hot/software-config/elements/heat-config-kubelet/install.d/hook-kubelet.py}
+        kubelet_orc: {get_file: ../../heat-templates/hot/software-config/elements/heat-config-kubelet/os-refresh-config/configure.d/50-heat-config-kubelet}
 
   heat_pod_config:
     type: OS::Heat::StructuredConfig
@@ -111,12 +120,31 @@ resources:
           - name: AUTH_ENCRYPTION_KEY
             value: {get_input: heat_auth_encryption_key}
           - name: HEAT_API_SERVICE_HOST
-            value: {get_attr: [server, first_address]}
+            value: {get_input: heat_api_service_host}
+          - name: OS_AUTH_URL
+            value: {get_input: os_auth_url}
 
-#        - name: heat-api
-#          image: {get_input: heat_api_image}
-#          ports:
-#          - containerPort: 8004
+        - name: heat-api
+          image: {get_input: heat_api_image}
+          ports:
+          - containerPort: 8004
+            hostPort: 8004
+          env:
+          - name: RABBIT_PASSWORD
+            value: guest
+          - name: DB_ROOT_PASSWORD
+            value: {get_input: mariadb_password}
+          - name: HEAT_DB_PASSWORD
+            value: {get_input: heatdb_password}
+          - name: KEYSTONE_PUBLIC_SERVICE_HOST
+            value: {get_input: keystone_host}
+          - name: AUTH_ENCRYPTION_KEY
+            value: {get_input: heat_auth_encryption_key}
+          - name: HEAT_API_SERVICE_HOST
+            value: {get_input: heat_api_service_host}
+          - name: OS_AUTH_URL
+            value: {get_input: os_auth_url}
+
 
         volumes:
         - name: mariadb-data
@@ -146,6 +174,9 @@ resources:
         heat_api_image: {get_param: heat_api_image}
         heat_engine_image: {get_param: heat_engine_image}
         heatdb_password: {get_resource: heatdb_password}
+        heat_auth_encryption_key: {get_resource: heat_auth_encryption_key}
+        heat_api_service_host: {get_attr: [server, first_address]}
+        os_auth_url: {get_param: os_auth_url}
 
   server:
     type: OS::Nova::Server
@@ -153,20 +184,24 @@ resources:
       image: {get_param: image}
       flavor: {get_param: flavor}
       key_name: {get_param: key_name}
+      user_data_format: SOFTWARE_CONFIG
+      networks:
+      - port: {get_resource: server_port}
+
+  server_port:
+    type: OS::Neutron::Port
+    properties:
+      network: {get_param: private_network}
       security_groups:
       - {get_resource: the_sg}
-      user_data_format: SOFTWARE_CONFIG
+
+  server_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: {get_param: public_network}
+      port_id: {get_resource: server_port}
 
 outputs:
-  status_code:
-    value:
-      get_attr: [heat_pod_deployment, deploy_status_code]
-  stdout:
-    value:
-      get_attr: [heat_pod_deployment, deploy_stdout]
-  stderr:
-    value:
-      get_attr: [heat_pod_deployment, deploy_stderr]
   mysql_cmd:
     value:
       str_replace:
@@ -180,5 +215,14 @@ outputs:
       str_replace:
         template:
           ssh ec2-user@host
+        params:
+          host: {get_attr: [server, first_address]}
+  standalone_env:
+    value:
+      str_replace:
+        template: |
+          echo "OS_TENANT_ID must be set. Currently set to '$OS_TENANT_ID'"
+          export HEAT_URL=http://host:8004/v1/$OS_TENANT_ID
+          export OS_NO_CLIENT_AUTH=True
         params:
           host: {get_attr: [server, first_address]}
