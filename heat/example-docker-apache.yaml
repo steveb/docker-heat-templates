@@ -44,6 +44,7 @@ resources:
     type: OS::Heat::StructuredDeployment
     properties:
       name: 10_apache_deployment
+      signal_transport: NO_SIGNAL
       config:
         get_resource: hook_config
       server:
@@ -83,6 +84,7 @@ resources:
     type: OS::Heat::SoftwareDeployment
     properties:
       actions: [CREATE, UPDATE, DELETE]
+      signal_transport: NO_SIGNAL
       name: 20_apache_deployment
       config:
         get_resource: apache_config
@@ -98,6 +100,7 @@ resources:
       security_groups:
       - {get_resource: the_sg}
       user_data_format: SOFTWARE_CONFIG
+      software_config_transport: POLL_TEMP_URL
 
 outputs:
   status_code:
