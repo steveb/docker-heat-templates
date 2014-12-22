@@ -11,12 +11,11 @@ IMAGES=\
 
 SAVE_IMAGES=\
     kollaglue/fedora-rdo-mariadb \
-    kollaglue/fedora-rdo-rabbitmq
-    # \
-    #stevebake/heat-base-standalone \
-    #stevebake/heat-api-standalone \
-    #stevebake/heat-api-cfn-standalone \
-    #stevebake/heat-engine-standalone
+    kollaglue/fedora-rdo-rabbitmq \
+    stevebake/heat-base-standalone \
+    stevebake/heat-api-standalone \
+    stevebake/heat-api-cfn-standalone \
+    stevebake/heat-engine-standalone
 
 SAVE_IMAGE_PARENTS=kollaglue stevebake
 
@@ -81,22 +80,23 @@ images: $(IMAGES)
 $(IMAGES):
 	GIT_ORIGIN=$(GIT_ORIGIN) BRANCH=$(BRANCH) TAG=$(TAG) $(MAKE) -C $@
 
-HEAT_STANDALONE_IMAGE := $(patsubst %,heat-standalone-image/%.tar,$(SAVE_IMAGES))
 
-$(HEAT_STANDALONE_IMAGE):
-	mkdir -p `dirname $@`
-	docker save $@ > $@
+$(SAVE_IMAGES):
+	mkdir -p heat-standalone-image
+	@echo "extracting $@ to heat-standalone-image"
+	cd heat-standalone-image && docker save $@ | tar -x
 	
-	# extract and delete the repositories file from the image tar
-	tar -xOf $@ repositories > $@.repositories
-	tar --delete -f $@ repositories
-	
-	# add to the merged repositories file
-	./merge-repositories heat-standalone-image/repositories < $@.repositories
+	@echo "adding to the merged-repositories file"
+	cat heat-standalone-image/repositories | ./merge-repositories heat-standalone-image/merged-repositories
+
+heat-standalone-image.tar: heat-standalone-image
+	rm heat-standalone-image/repositories
+	mv heat-standalone-image/merged-repositories heat-standalone-image/repositories
+	cd heat-standalone-image && tar -cvf ../heat-standalone-image.tar *
+
+heat-standalone-image: $(SAVE_IMAGES)
 
 clean:
 	rm -rf heat-standalone-image heat-standalone-image.tar
 
-heat-standalone-image.tar: $(HEAT_STANDALONE_IMAGE)
-
-.PHONY: images $(IMAGES) bounce env stop start
+.PHONY: images $(IMAGES) bounce env stop start clean $(SAVE_IMAGES)
