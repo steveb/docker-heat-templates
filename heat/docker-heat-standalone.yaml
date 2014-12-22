@@ -9,8 +9,6 @@ parameters:
   image:
     type: string
     default: heat-functional-tests-image
-  insecure_registry:
-    type: string
   mariadb_image:
     type: string
     default: kollaglue/fedora-rdo-mariadb
@@ -82,8 +80,6 @@ resources:
     type: OS::Heat::StructuredConfig
     properties:
       group: kubelet
-      options:
-        insecure_registry: true
       config:
         version: v1beta2
         containers:
