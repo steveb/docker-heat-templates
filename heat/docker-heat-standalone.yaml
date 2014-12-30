@@ -48,34 +48,6 @@ resources:
         port_range_min: 8004
         port_range_max: 8004
 
-  hook_config:
-    type: OS::Heat::StructuredConfig
-    properties:
-      group: cfn-init
-      config:
-        config:
-          files:
-            /var/lib/heat-config/hooks/kubelet:
-              content:
-                get_input: kubelet_hook
-              mode: '000755'
-            /usr/libexec/os-refresh-config/configure.d/50-heat-config-kubelet:
-              content:
-                get_input: kubelet_orc
-              mode: '000755'
-
-  hook_deployment:
-    type: OS::Heat::StructuredDeployment
-    properties:
-      name: 10_apache_deployment
-      config:
-        get_resource: hook_config
-      server:
-        get_resource: server
-      input_values:
-        kubelet_hook: {get_file: ../../heat-templates/hot/software-config/elements/heat-config-kubelet/install.d/hook-kubelet.py}
-        kubelet_orc: {get_file: ../../heat-templates/hot/software-config/elements/heat-config-kubelet/os-refresh-config/configure.d/50-heat-config-kubelet}
-
   heat_pod_config:
     type: OS::Heat::StructuredConfig
     properties:
@@ -181,21 +153,21 @@ resources:
       flavor: {get_param: flavor}
       key_name: {get_param: key_name}
       user_data_format: SOFTWARE_CONFIG
-      networks:
-      - port: {get_resource: server_port}
-
-  server_port:
-    type: OS::Neutron::Port
-    properties:
-      network: {get_param: private_network}
       security_groups:
       - {get_resource: the_sg}
+      networks:
+      - network: {get_param: private_network}
 
-  server_floating_ip:
+  server_floating_ip_assoc:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: {get_resource: floating_ip}
+      port_id: {get_attr: [server, addresses, {get_param: private_network}, 0, port]}
+
+  floating_ip:
     type: OS::Neutron::FloatingIP
     properties:
       floating_network: {get_param: public_network}
-      port_id: {get_resource: server_port}
 
 outputs:
   mysql_cmd:
@@ -217,8 +189,18 @@ outputs:
     value:
       str_replace:
         template: |
+          OS_TENANT_ID=`keystone token-get | grep tenant_id | cut -d' ' -f4`
           echo "OS_TENANT_ID must be set. Currently set to '$OS_TENANT_ID'"
           export HEAT_URL=http://host:8004/v1/$OS_TENANT_ID
           export OS_NO_CLIENT_AUTH=True
         params:
           host: {get_attr: [server, first_address]}
+  status_code:
+    value:
+      get_attr: [heat_pod_deployment, deploy_status_code]
+  stdout:
+    value:
+      get_attr: [heat_pod_deployment, deploy_stdout]
+  stderr:
+    value:
+      get_attr: [heat_pod_deployment, deploy_stderr]
