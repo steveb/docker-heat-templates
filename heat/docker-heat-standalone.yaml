@@ -129,7 +129,6 @@ resources:
   heat_pod_deployment:
     type: OS::Heat::StructuredDeployment
     properties:
-      #actions: [CREATE, UPDATE, DELETE]
       name: 20_apache_deployment
       config:
         get_resource: heat_pod_config
