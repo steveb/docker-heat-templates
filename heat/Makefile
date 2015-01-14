@@ -13,8 +13,3 @@ update-docker-heat-standalone:
 	   -P image=$(OS_IMAGE) \
 	   -P os_auth_url=$(OS_AUTH_URL) \
 	    docker-heat
-
-create-example-kubelet-apache:
-	heat stack-create -f example-kubelet-apache.yaml \
-	   -P image=$(OS_IMAGE) \
-	   kubelet-apache
